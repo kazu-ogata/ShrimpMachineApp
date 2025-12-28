@@ -40,7 +40,7 @@ class ShrimpDetector:
 
         # Define the counting line (horizontal, in the middle)
         # We assume shrimp move from top-to-bottom
-        self.counting_line_x = int(imgsz * 0.5) 
+        self.counting_line_x = int(imgsz * 0.3) 
         
         # Tracking parameters
         self.active_tracks = {}  # {id: [cx, cy, frames_unseen]}
@@ -48,9 +48,9 @@ class ShrimpDetector:
         self.counted_track_ids = set()
         
         # How far can a shrimp move (in pixels) between frames?
-        self.max_distance = int(imgsz / 8) 
+        self.max_distance = int(imgsz / 3) 
         # How many frames can we lose a shrimp before dropping the track?
-        self.max_disappeared_frames = 10 
+        self.max_disappeared_frames = 20
 
     def load_count(self):
         """Load the total count from a text file."""
@@ -309,12 +309,12 @@ class ShrimpDetector:
 
             # Draw the counting line (mapped back to original frame)
             # (x_line_pad - pad_x) / scale = x_line_orig
-            line_x_orig = int((self.counting_line_x - pad_x) / scale)
+            # line_x_orig = int((self.counting_line_x - pad_x) / scale)
             
             # Check if the line is inside the frame's WIDTH
-            if 0 <= line_x_orig < w: 
+            # if 0 <= line_x_orig < w: 
                 # Draw a VERTICAL line from top (y=0) to bottom (y=h)
-                cv2.line(overlay, (line_x_orig, 0), (line_x_orig, h), (0, 255, 255), 2)
+            #    cv2.line(overlay, (line_x_orig, 0), (line_x_orig, h), (0, 255, 255), 2)
 
             # Semi-transparent overlay
             frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
