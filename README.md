@@ -48,3 +48,6 @@ The core of the system is a **YOLO (You Only Look Once)** model exported to **ON
 ### IoT & Control Logic
 * **MQTT (HiveMQ):** Used as the communication backbone for low-latency hardware triggers (Servos/Pumps).
 * **Centroid Tracking:** Assigns unique IDs to detected objects to prevent double-counting as shrimp move across the frame.
+
+---
+**© 2025-2026 | Computer Engineering | Project Design 1 & 2 | Team 16**
