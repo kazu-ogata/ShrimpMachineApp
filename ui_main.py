@@ -1,18 +1,14 @@
 import os
-# --- FIX ZOOMED-IN GUI ON TOUCHSCREEN ---
-# These environment variables prevent PyQt from scaling automatically
+import sys
+from PyQt5 import QtWidgets, QtCore, QtGui
+from ui_biomass import BiomassWindow
+from theme import *
+
+# Fix scaling for Touchscreens
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
 os.environ["QT_SCALE_FACTOR"] = "1"
 os.environ["QT_FONT_DPI"] = "96"
 os.environ["QT_SCREEN_SCALE_FACTORS"] = "1"
-import sys
-from PyQt5 import QtWidgets, QtCore
-from ui_biomass import BiomassWindow
-from ui_history import HistoryWindow
-from database import get_last_record
-from theme import *
-
-# --- Optional: set the platform plugin explicitly (Wayland or EGLFS) ---
 os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
 
 class MainMenu(QtWidgets.QWidget):
@@ -21,140 +17,98 @@ class MainMenu(QtWidgets.QWidget):
         self.user_id = user_id
         self.logout_requested = False
 
-        # Make it fixed to target screen size
+        # Window Config
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint)
         self.setFixedSize(1024, 600)
+        
+        # 1. Background
+        self.setStyleSheet("background-color: #FAF7F2;") 
 
-        # --- Normalize size policy (prevents zoom scaling) ---
-        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        # Main Layout (Original margins and spacing)
+        self.main_layout = QtWidgets.QVBoxLayout(self)
+        self.main_layout.setContentsMargins(60, 40, 60, 40)
+        self.main_layout.setSpacing(0)
 
-        # --- Styling ---
-        self.setStyleSheet(f"background-color:{BG_COLOR}; color:{TEXT_COLOR}; font-family:{FONT_FAMILY};")
+        # 1. Middle Section: (Your original layout logic)
+        self.mid_layout = QtWidgets.QHBoxLayout()
+        
+        # Left Side: Your original Welcome Text style
+        self.lblWelcome = QtWidgets.QLabel("WELCOME!")
+        self.lblWelcome.setStyleSheet("font-size: 65px; font-weight: 900; color: #111; border: none;")
+        self.lblWelcome.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.lblWelcome.setContentsMargins(0, 80, 0, 0)
 
-        # --- Title ---
-        self.lblTitle = QtWidgets.QLabel("Shrimp Biomass Calculation System")
-        self.lblTitle.setAlignment(QtCore.Qt.AlignCenter)
-        self.lblTitle.setStyleSheet("font-size:18px; font-weight:bold; margin-top:6px; margin-bottom:8px;")
+        # Right Side: Your original Landing Image scaling
+        self.lblImage = QtWidgets.QLabel()
+        img_path = "/home/hiponpd/Documents/GitHub/ShrimpMachineApp/assets/images/landing.png"
+        if os.path.exists(img_path):
+            pixmap = QtGui.QPixmap(img_path).scaled(450, 450, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.lblImage.setPixmap(pixmap)
+        self.lblImage.setAlignment(QtCore.Qt.AlignCenter)
+        
+        self.mid_layout.addWidget(self.lblWelcome, stretch=1)
+        self.mid_layout.addWidget(self.lblImage, stretch=1)
 
-        # --- Last Process (center area) ---
-        self.lastFrame = QtWidgets.QFrame()
-        self.lastFrame.setStyleSheet("""
-            QFrame {
-                background-color: #f7fbff;
-                border: 2px solid #0077cc;
+        self.main_layout.addLayout(self.mid_layout)
+
+        # 2. Bottom Section: Controls
+        self.button_layout = QtWidgets.QHBoxLayout()
+        
+        # 2, 3, 4. START Button: Black background, White text, 10px corner radius
+        self.btnStart = QtWidgets.QPushButton("START")
+        self.btnStart.setFixedSize(280, 70)
+        self.btnStart.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.btnStart.setStyleSheet("""
+            QPushButton {
+                background-color: #111111;
+                color: white;
                 border-radius: 10px;
-                padding: 14px;
+                font-size: 24px;
+                font-weight: bold;
+                letter-spacing: 2px;
             }
+            QPushButton:pressed { background-color: #333333; }
         """)
 
-        lastLayout = QtWidgets.QVBoxLayout(self.lastFrame)
-        lastLayout.setSpacing(6)
-        lastLayout.setAlignment(QtCore.Qt.AlignCenter)
-
-        self.lblRecentTitle = QtWidgets.QLabel("Last Process Summary")
-        self.lblRecentTitle.setAlignment(QtCore.Qt.AlignCenter)
-        self.lblRecentTitle.setStyleSheet("font-size:18px; font-weight:bold; color:#005fa3;")
-
-        self.lblRecent = QtWidgets.QLabel("No recorded process yet.")
-        self.lblRecent.setAlignment(QtCore.Qt.AlignCenter)
-        self.lblRecent.setWordWrap(True)
-        self.lblRecent.setStyleSheet("""
-            font-size:16px;
-            font-weight:600;
-            color:#333;
-            line-height: 1.2;
+        # 5. logout: Minimalist black text in the same position
+        self.btnLogout = QtWidgets.QPushButton("logout")
+        self.btnLogout.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.btnLogout.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #111111;
+                font-size: 18px;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton:hover { color: #444444; }
         """)
 
-        lastLayout.addWidget(self.lblRecentTitle)
-        lastLayout.addWidget(self.lblRecent)
+        self.button_layout.addWidget(self.btnStart)
+        self.button_layout.addStretch()
+        self.button_layout.addWidget(self.btnLogout)
 
-        # --- Buttons (bottom row) ---
-        self.btnStart = self.make_button("Start Biomass Calculation", BTN_SYNC)
-        self.btnHistory = self.make_button("View History", BTN_COLOR)
-        self.btnLogout = self.make_button("Logout", BTN_DANGER)
+        self.main_layout.addLayout(self.button_layout)
 
-        buttonLayout = QtWidgets.QHBoxLayout()
-        buttonLayout.setSpacing(12)
-        buttonLayout.setContentsMargins(20, 8, 20, 12)
-        buttonLayout.addWidget(self.btnStart)
-        buttonLayout.addWidget(self.btnHistory)
-        buttonLayout.addWidget(self.btnLogout)
-
-        # --- Main Layout ---
-        mainLayout = QtWidgets.QVBoxLayout(self)
-        mainLayout.setContentsMargins(16, 12, 16, 12)
-        mainLayout.setSpacing(8)
-        mainLayout.addWidget(self.lblTitle)
-        mainLayout.addStretch(1)
-        mainLayout.addWidget(self.lastFrame, stretch=3, alignment=QtCore.Qt.AlignCenter)
-        mainLayout.addStretch(1)
-        mainLayout.addLayout(buttonLayout)
-
-        # --- Connections ---
+        # Connections
         self.btnStart.clicked.connect(self.open_biomass)
-        self.btnHistory.clicked.connect(self.open_history)
         self.btnLogout.clicked.connect(self.logout)
-
-        # --- Load last process ---
-        self.update_recent()
-
-    def make_button(self, text, color):
-        b = QtWidgets.QPushButton(text)
-        b.setFixedHeight(72)
-        b.setFixedWidth(280)
-        b.setStyleSheet(f"""
-            QPushButton {{
-                background-color:{color};
-                color:white;
-                border-radius:12px;
-                font-size:18px;
-                font-weight:bold;
-                padding: 6px;
-            }}
-            QPushButton:pressed {{
-                background-color:#005fa3;
-            }}
-        """)
-        return b
-
-    def update_recent(self):
-        rec = get_last_record(self.user_id)
-        if rec:
-            shrimpCount, biomass, feed, date = rec[3], rec[4], rec[5], rec[6]
-            self.lblRecent.setText(
-                f"<div style='text-align:center;'>"
-                f"<b>Shrimp Count:</b> {shrimpCount}<br>"
-                f"<b>Biomass:</b> {biomass:.3f} g<br>"
-                f"<b>Feed:</b> {feed:.3f} g<br>"
-                f"<span style='font-size:14px; color:#666;'><b>Date:</b> {date[:19]}</span>"
-                f"</div>"
-            )
-        else:
-            self.lblRecent.setText("No recorded process yet.")
 
     def open_biomass(self):
         self.bw = BiomassWindow(self.user_id, self)
-        self.bw.show()
-        self.hide()
-
-    def open_history(self):
-        self.hw = HistoryWindow(self, self.user_id)
-        self.hw.show()
+        self.bw.showFullScreen()
         self.hide()
 
     def logout(self):
         self.logout_requested = True
         self.close()
 
-
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-
-    # Force consistent scaling before showing
     app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
     app.setAttribute(QtCore.Qt.AA_DisableHighDpiScaling, True)
     app.setAttribute(QtCore.Qt.AA_Use96Dpi, True)
 
-    window = MainMenu(user_id=1)
-    window.show()
+    window = MainMenu(user_id="test_user")
+    window.showFullScreen()
     sys.exit(app.exec_())

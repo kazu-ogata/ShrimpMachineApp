@@ -1,435 +1,286 @@
 import sys, cv2, datetime, os
-# Subprocess is no longer needed
-# os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0" # These are set in run_shrimp_app.sh
-# os.environ["QT_SCALE_FACTOR"] = "1"
-# os.environ["QT_FONT_DPI"] = "96"
-# os.environ["QT_SCREEN_SCALE_FACTORS"] = "1"
-# os.environ.setdefault("QT_QPA_PLATFORM", "wayland") # This was commented out
-
 from PyQt5 import QtWidgets, QtGui, QtCore
 from compute import compute_feed
 from detector import ShrimpDetector
 from camera import Camera
 from database import save_biomass_record
-from theme import *
 from mqtt_client import MqttClient
 
-# --- Catch all unhandled exceptions in Qt ---
-def qt_exception_hook(exctype, value, traceback):
-    print("Unhandled Exception:", value)
-sys.excepthook = qt_exception_hook
+# --- Aquaculture Palette ---
+COLOR_BG = "#FAF7F2"
+COLOR_TEAL = "#0D3D45"   # Primary
+COLOR_AQUA = "#2A9D8F"   # Active
+COLOR_NEUTRAL = "#E0E0E0" # Disabled/Grey
 
-
-# --- NEW: Custom Numpad Dialog ---
 class NumberInputDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Set Target Count")
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-        self.setStyleSheet(f"background-color:{BG_COLOR}; color:{TEXT_COLOR}; font-size: 20px;")
+        self.setStyleSheet(f"background-color:{COLOR_BG}; border: 2px solid {COLOR_TEAL}; border-radius: 15px;")
         self.setModal(True)
-        self.setMinimumWidth(400)
-
-        self.current_value = "0" # Internal string to store the number
-
-        self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(20, 20, 20, 20)
-
-        self.label = QtWidgets.QLabel("Enter target shrimp count:")
-        self.label.setStyleSheet("font-size: 22px; margin-bottom: 10px;")
+        self.setMinimumWidth(350)
+        self.current_value = "0"
         
-        # This is the new display for the number
+        layout = QtWidgets.QVBoxLayout(self)
         self.display = QtWidgets.QLabel("0")
-        self.display.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.display.setStyleSheet("font-size:32px; padding:10px; border-radius:10px; background-color: white; color: black;")
-        self.display.setFixedHeight(70)
+        self.display.setStyleSheet(f"font-size: 40px; font-weight: bold; background: white; color: {COLOR_TEAL}; padding: 20px; border-radius: 10px;")
+        self.display.setAlignment(QtCore.Qt.AlignRight)
+        layout.addWidget(self.display)
 
-        self.layout.addWidget(self.label)
-        self.layout.addWidget(self.display)
-        
-        # --- Create the Numpad Grid ---
-        grid_layout = QtWidgets.QGridLayout()
-        grid_layout.setSpacing(10)
-        
-        buttons = [
-            '7', '8', '9',
-            '4', '5', '6',
-            '1', '2', '3',
-            'Clear', '0', '<-'
-        ]
-        
-        positions = [(i, j) for i in range(4) for j in range(3)]
-        
-        for position, name in zip(positions, buttons):
-            button = QtWidgets.QPushButton(name)
-            button.setMinimumHeight(60)
-            button.setStyleSheet("""
-                QPushButton { font-size: 20px; font-weight: bold; background-color: #E0E0E0; color: #333; border-radius: 8px; }
-                QPushButton:pressed { background-color: #C0C0C0; }
-            """)
-            
-            if name == 'Clear':
-                button.setStyleSheet("background-color: #f0ad4e; color: white; font-size: 20px; font-weight: bold; border-radius: 8px;")
-            if name == '<-':
-                button.setStyleSheet("background-color: #d9534f; color: white; font-size: 20px; font-weight: bold; border-radius: 8px;")
-                
-            # Connect the button click to our function
-            button.clicked.connect(lambda state, char=name: self.on_button_press(char))
-            grid_layout.addWidget(button, position[0], position[1])
+        grid = QtWidgets.QGridLayout()
+        buttons = ['7', '8', '9', '4', '5', '6', '1', '2', '3', 'Clear', '0', 'OK']
+        for i, name in enumerate(buttons):
+            btn = QtWidgets.QPushButton(name)
+            btn.setFixedSize(80, 60)
+            btn.setStyleSheet(f"background-color: white; color: {COLOR_TEAL}; font-size: 20px; font-weight: bold; border-radius: 10px;")
+            if name == 'OK': btn.clicked.connect(self.accept)
+            elif name == 'Clear': btn.clicked.connect(self.clear)
+            else: btn.clicked.connect(lambda ch, n=name: self.append_num(n))
+            grid.addWidget(btn, i//3, i%3)
+        layout.addLayout(grid)
 
-        self.layout.addLayout(grid_layout)
-        # --- End of Numpad Grid ---
-
-        self.btnBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        self.btnBox.accepted.connect(self.accept)
-        self.btnBox.rejected.connect(self.reject)
-        
-        ok_btn = self.btnBox.button(QtWidgets.QDialogButtonBox.Ok)
-        cancel_btn = self.btnBox.button(QtWidgets.QDialogButtonBox.Cancel)
-        ok_btn.setStyleSheet(f"background-color:{BTN_SYNC}; color:white; font-size:18px; padding:10px 25px; border-radius:8px;")
-        cancel_btn.setStyleSheet(f"background-color:{BTN_DANGER}; color:white; font-size:18px; padding:10px 25px; border-radius:8px;")
-        
-        self.layout.addWidget(self.btnBox)
-
-    def on_button_press(self, char):
-        """Handles a numpad button press."""
-        if char == 'Clear':
-            self.current_value = "0"
-        elif char == '<-':
-            self.current_value = self.current_value[:-1]
-            if not self.current_value:
-                self.current_value = "0"
-        else: # It's a number
-            if self.current_value == "0":
-                self.current_value = char
-            else:
-                self.current_value += char
-        
-        # Max length check (optional)
-        if len(self.current_value) > 5:
-             self.current_value = self.current_value[:5]
-
+    def append_num(self, n):
+        self.current_value = n if self.current_value == "0" else self.current_value + n
         self.display.setText(self.current_value)
 
+    def clear(self):
+        self.current_value = "0"
+        self.display.setText("0")
+
     def get_number(self):
-        return int(self.current_value) if self.current_value.isdigit() else 0
-# --- End of new class ---
-
-
-# --- Custom Dialog for Pump Control ---
-class PumpControlDialog(QtWidgets.QDialog):
-    # (This class is unchanged)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.mqtt = parent.mqtt 
-        
-        self.setWindowTitle("Pump Control")
-        self.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-        self.setStyleSheet(f"background-color:{BG_COLOR}; color:{TEXT_COLOR}; font-size: 20px;")
-        self.setModal(True)
-        self.setMinimumWidth(400) 
-
-        self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(20, 20, 20, 20)
-        self.layout.setSpacing(15)
-
-        self.label = QtWidgets.QLabel("Water Pump Control")
-        self.label.setStyleSheet("font-size: 22px; font-weight: bold; margin-bottom: 10px;")
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
-
-        self.btnStartPump = QtWidgets.QPushButton("START PUMP")
-        self.btnStartPump.setFixedHeight(80)
-        self.btnStartPump.setStyleSheet(f"background-color:{BTN_SYNC}; color:white; font-size:24px; font-weight:bold; border-radius:10px;")
-        
-        self.btnStopPump = QtWidgets.QPushButton("STOP PUMP")
-        self.btnStopPump.setFixedHeight(80)
-        self.btnStopPump.setStyleSheet(f"background-color:{BTN_DANGER}; color:white; font-size:24px; font-weight:bold; border-radius:10px;")
-        
-        self.btnClose = QtWidgets.QPushButton("Done")
-        self.btnClose.setFixedHeight(50)
-        self.btnClose.setStyleSheet(f"background-color:#999999; color:white; font-size:18px; border-radius:8px;")
-
-        self.btnStartPump.clicked.connect(self.start_pump)
-        self.btnStopPump.clicked.connect(self.stop_pump)
-        self.btnClose.clicked.connect(self.accept) 
-
-        self.layout.addWidget(self.label)
-        self.layout.addWidget(self.btnStartPump)
-        self.layout.addWidget(self.btnStopPump)
-        self.layout.addWidget(self.btnClose, alignment=QtCore.Qt.AlignCenter)
-
-    def start_pump(self):
-        print("MQTT: Sending PUMP ON")
-        self.mqtt.publish("shrimp/pump/command", "PUMP ON")
-
-    def stop_pump(self):
-        print("MQTT: Sending PUMP OFF")
-        self.mqtt.publish("shrimp/pump/command", "PUMP OFF")
-
-# --- Video Label (Unchanged) ---
-class VideoLabel(QtWidgets.QLabel):
-    # (This class is unchanged)
-    def __init__(self):
-        super().__init__()
-        self.setAlignment(QtCore.Qt.AlignCenter)
-        self.setStyleSheet("border: 2px solid #0077cc; border-radius: 8px; background-color: black;")
-        self.setMinimumSize(640, 240)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-    def set_frame(self, frame):
-        try:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb.shape
-            qimg = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
-            pix = QtGui.QPixmap.fromImage(qimg)
-            pix = pix.scaled(self.width(), self.height(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-            self.setPixmap(pix)
-        except Exception as e:
-            print("Error displaying frame:", e)
-
+        return int(self.current_value)
 
 class BiomassWindow(QtWidgets.QWidget):
     def __init__(self, user_id, parent=None):
         super().__init__()
-        # (Init section is unchanged)
-        self.parent = parent
         self.user_id = user_id
+        self.parent = parent
         self.detector = ShrimpDetector()
         self.camera = Camera()
         self.mqtt = MqttClient()
         self.mqtt.connect()
+        
         self.running = False
-        self.count = 0
+        self.pump_on = False
         self.threshold_count = 0
         self.threshold_reached = False
+
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-        self.setStyleSheet(f"background-color:{BG_COLOR}; color:{TEXT_COLOR}; font-family:{FONT_FAMILY};")
-        QtCore.QTimer.singleShot(0, lambda: self.showFullScreen())
-        self.btnArrowBack = QtWidgets.QPushButton()
-        icon = self.style().standardIcon(QtWidgets.QStyle.SP_ArrowLeft)
-        self.btnArrowBack.setIcon(icon)
-        self.btnArrowBack.setIconSize(QtCore.QSize(40, 40))
-        self.btnArrowBack.setFixedSize(QtCore.QSize(50, 50))
-        self.btnArrowBack.setFlat(True)
-        self.btnArrowBack.setStyleSheet("border: none; padding: 5px;")
-        self.btnArrowBack.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
-        self.lblTitle = QtWidgets.QLabel("Biomass Calculation")
-        self.lblTitle.setAlignment(QtCore.Qt.AlignCenter)
-        self.lblTitle.setStyleSheet("font-size:20px; font-weight:bold; margin-bottom:6px;")
-        top_bar_layout = QtWidgets.QHBoxLayout()
-        top_bar_layout.addWidget(self.btnArrowBack, stretch=0, alignment=QtCore.Qt.AlignLeft)
-        top_bar_layout.addWidget(self.lblTitle, stretch=1, alignment=QtCore.Qt.AlignCenter)
-        spacer = QtWidgets.QWidget()
-        spacer.setFixedSize(QtCore.QSize(50, 50))
-        top_bar_layout.addWidget(spacer, stretch=0, alignment=QtCore.Qt.AlignRight)
-        self.lblStatus = QtWidgets.QLabel("Idle")
-        self.lblStatus.setAlignment(QtCore.Qt.AlignRight)
-        self.lblStatus.setStyleSheet("font-size:16px; margin-bottom:6px; color:#555;")
-        self.lblThresholdStatus = QtWidgets.QLabel("Target Count: Not Set")
-        self.lblThresholdStatus.setAlignment(QtCore.Qt.AlignLeft)
-        self.lblThresholdStatus.setStyleSheet("font-size:16px; margin-bottom:6px; color:#005fa3; font-weight:bold;")
-        status_layout = QtWidgets.QHBoxLayout()
-        status_layout.addWidget(self.lblStatus, 1)
-        status_layout.addWidget(self.lblThresholdStatus, 1)
-        self.video = VideoLabel()
-        self.lblCount = QtWidgets.QLabel("Count: 0")
-        self.lblFeed = QtWidgets.QLabel("Biomass: 0.00g | Feed: 0.00g | Protein: 0.00g | Filler: 0.00g")
-        for lbl in [self.lblCount, self.lblFeed]:
-            lbl.setAlignment(QtCore.Qt.AlignCenter)
-            lbl.setStyleSheet("font-size:16px; margin:4px;")
-        self.COLOR_SET_COUNT = "#5bc0de"
-        self.COLOR_START = "#5cb85c"
-        self.COLOR_STOP = "#d9534f"
-        self.COLOR_PUMP = "#f0ad4e"
-        self.COLOR_SAVE = "#0077cc"
-        self.COLOR_RESET = "#999999"
-        self.COLOR_RESET_DOOR = "#00AEEF"
-        self.COLOR_DISPENSE_INACTIVE = "#999999"
-        self.COLOR_DISPENSE_ACTIVE = "#8a63d2"
-        self.btnCount = self.make_button("Set Count", self.COLOR_SET_COUNT)
-        self.btnStart = self.make_button("Start", self.COLOR_START)
-        self.btnStop = self.make_button("Stop", self.COLOR_STOP)
-        self.btnPump = self.make_button("Pump", self.COLOR_PUMP)
-        self.btnSave = self.make_button("Save", self.COLOR_SAVE)
-        self.btnReset = self.make_button("Reset", self.COLOR_RESET)
-        self.btnResetDoor = self.make_button("Reset Door", self.COLOR_RESET_DOOR)
-        self.btnDispense = self.make_button("Dispense Feed", self.COLOR_DISPENSE_INACTIVE)
-        self.btnDispense.setEnabled(False) 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(16, 10, 16, 12)
-        layout.setSpacing(8)
-        layout.addLayout(top_bar_layout)
-        layout.addLayout(status_layout)
-        layout.addWidget(self.video, alignment=QtCore.Qt.AlignCenter)
-        layout.setStretch(2, 1)
-        layout.addWidget(self.lblCount)
-        layout.addWidget(self.lblFeed)
-        button_row_1 = QtWidgets.QHBoxLayout()
-        button_row_1.setSpacing(10)
-        button_row_1.setAlignment(QtCore.Qt.AlignCenter)
-        for b in [self.btnCount, self.btnStart, self.btnStop, self.btnPump]:
-            button_row_1.addWidget(b)
-        button_row_2 = QtWidgets.QHBoxLayout()
-        button_row_2.setSpacing(10)
-        button_row_2.setAlignment(QtCore.Qt.AlignCenter)
-        for b in [self.btnSave, self.btnReset, self.btnResetDoor, self.btnDispense]:
-            button_row_2.addWidget(b)
-        layout.addLayout(button_row_1)
-        layout.addLayout(button_row_2)
+        self.setStyleSheet(f"background-color: {COLOR_BG}; color: {COLOR_TEAL};")
+        self.showFullScreen()
+
+        self.init_ui()
+        
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.btnArrowBack.clicked.connect(self.go_back)
-        self.btnStart.clicked.connect(self.start)
-        self.btnStop.clicked.connect(self.stop)
-        self.btnPump.clicked.connect(self.open_pump_control)
-        self.btnSave.clicked.connect(self.save)
-        self.btnReset.clicked.connect(self.reset)
-        self.btnCount.clicked.connect(self.set_count)
-        self.btnResetDoor.clicked.connect(self.reset_door)
-        self.btnDispense.clicked.connect(self.dispense_feed)
 
-    def make_button(self, text, color):
-        b = QtWidgets.QPushButton(text)
-        b.setFixedWidth(220) 
-        b.setFixedHeight(56)
-        b.setStyleSheet(self.make_button_style(color))
-        return b
+    def init_ui(self):
+        # Overall vertical layout
+        self.main_layout = QtWidgets.QVBoxLayout(self)
+        self.main_layout.setContentsMargins(20, 10, 20, 20) # Small top margin (~2cm feel)
+        self.main_layout.setSpacing(10)
 
-    # --- On-Screen Keyboard Functions (DELETED) ---
-    # open_keyboard and close_keyboard are now gone
+        # 1. TOP BAR: Back button and Centered Title
+        top_bar = QtWidgets.QHBoxLayout()
+        self.btn_back = QtWidgets.QPushButton()
+        self.btn_back.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowLeft))
+        self.btn_back.setIconSize(QtCore.QSize(35, 35))
+        self.btn_back.setFixedSize(50, 50)
+        self.btn_back.setFlat(True)
+        self.btn_back.clicked.connect(self.go_back)
 
-    # ---------------- Logic ----------------
-    def start(self):
-        # (This function is unchanged)
-        if not self.running:
-            self.running = True
-            self.timer.start(100)
-            self.lblStatus.setText("Running...")
+        self.lbl_title = QtWidgets.QLabel("BIOMASS CALCULATION")
+        self.lbl_title.setStyleSheet(f"font-size: 28px; font-weight: 900; color: {COLOR_TEAL}; letter-spacing: 2px;")
+        self.lbl_title.setAlignment(QtCore.Qt.AlignCenter)
 
-    def stop(self):
-        # (This function is unchanged)
-        if self.running:
-            self.running = False
-            self.timer.stop()
-            self.lblStatus.setText("Stopped")
-            self.btnDispense.setEnabled(True)
-            self.btnDispense.setStyleSheet(self.make_button_style(self.COLOR_DISPENSE_ACTIVE))
+        top_bar.addWidget(self.btn_back)
+        top_bar.addStretch()
+        top_bar.addWidget(self.lbl_title)
+        top_bar.addStretch()
+        top_bar.addSpacing(50) # To perfectly center the title against the back button
+        self.main_layout.addLayout(top_bar)
 
-    def reset(self):
-        # (This function is unchanged)
+        # 2. CONTENT AREA: Horizontal Split
+        content_hbox = QtWidgets.QHBoxLayout()
+        content_hbox.setSpacing(30)
+
+        # --- LEFT SIDE: CAMERA ---
+        left_layout = QtWidgets.QVBoxLayout()
+        self.video_label = QtWidgets.QLabel()
+        self.video_label.setStyleSheet(f"background-color: black; border-radius: 15px; border: 2px solid {COLOR_TEAL};")
+        self.video_label.setFixedSize(640, 420)
+        
+        self.lbl_status = QtWidgets.QLabel("SYSTEM READY")
+        self.lbl_status.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {COLOR_AQUA};")
+        
+        left_layout.addWidget(self.video_label)
+        left_layout.addWidget(self.lbl_status) # Low left location
+        content_hbox.addLayout(left_layout)
+
+        # --- RIGHT SIDE: DATA & CONTROLS ---
+        right_layout = QtWidgets.QVBoxLayout()
+        
+        # Data Container - Aligned with top of camera
+        data_container = QtWidgets.QFrame()
+        data_container.setStyleSheet(f"background: white; border-radius: 15px; border: 2px solid {COLOR_NEUTRAL};")
+        data_vbox = QtWidgets.QVBoxLayout(data_container)
+        
+        self.lbl_target = QtWidgets.QLabel("Target: Not Set")
+        self.lbl_target.setStyleSheet("font-size: 13px; color: #555; border: none; font-weight: bold;")
+        self.lbl_count = QtWidgets.QLabel("Count: 0")
+        self.lbl_count.setStyleSheet(f"font-size: 36px; font-weight: 900; color: {COLOR_TEAL}; border: none;")
+        self.lbl_bio = QtWidgets.QLabel("Biomass: 0.00g\nFeed: 0.00g")
+        self.lbl_bio.setStyleSheet("font-size: 18px; color: #444; border: none; line-height: 140%;")
+        
+        data_vbox.addWidget(self.lbl_target)
+        data_vbox.addWidget(self.lbl_count)
+        data_vbox.addWidget(self.lbl_bio)
+        
+        # Button Grid
+        btn_grid = QtWidgets.QGridLayout()
+        btn_grid.setSpacing(10)
+        
+        self.btn_set = self.create_btn("SET TARGET", COLOR_TEAL)
+        self.btn_start = self.create_btn("START", COLOR_TEAL)
+        
+        # Initially disabled buttons
+        self.btn_stop = self.create_btn("STOP", COLOR_NEUTRAL)
+        self.btn_stop.setEnabled(False)
+        self.btn_save = self.create_btn("SAVE", COLOR_NEUTRAL)
+        self.btn_save.setEnabled(False)
+        self.btn_dispense = self.create_btn("DISPENSE FEED", COLOR_NEUTRAL)
+        self.btn_dispense.setEnabled(False)
+        
+        self.btn_pump = self.create_btn("PUMP: OFF", COLOR_TEAL)
+        self.btn_reset = self.create_btn("RESET", COLOR_NEUTRAL)
+
+        btn_grid.addWidget(self.btn_set, 0, 0)
+        btn_grid.addWidget(self.btn_start, 0, 1)
+        btn_grid.addWidget(self.btn_stop, 1, 0)
+        btn_grid.addWidget(self.btn_pump, 1, 1)
+        btn_grid.addWidget(self.btn_save, 2, 0)
+        btn_grid.addWidget(self.btn_reset, 2, 1)
+        btn_grid.addWidget(self.btn_dispense, 3, 0, 1, 2)
+
+        right_layout.addWidget(data_container)
+        right_layout.addSpacing(15)
+        right_layout.addLayout(btn_grid)
+        right_layout.addStretch()
+        
+        content_hbox.addLayout(right_layout)
+        self.main_layout.addLayout(content_hbox)
+
+        # Bindings
+        self.btn_set.clicked.connect(self.set_count)
+        self.btn_start.clicked.connect(self.start)
+        self.btn_stop.clicked.connect(self.stop)
+        self.btn_pump.clicked.connect(self.toggle_pump)
+        self.btn_reset.clicked.connect(self.reset_all)
+        self.btn_save.clicked.connect(self.save)
+        self.btn_dispense.clicked.connect(self.dispense)
+
+    def create_btn(self, text, color):
+        btn = QtWidgets.QPushButton(text)
+        btn.setFixedHeight(60)
+        btn.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        btn.setStyleSheet(self.get_btn_style(color))
+        return btn
+
+    def get_btn_style(self, color):
+        txt = "white" if color != COLOR_NEUTRAL else "#555"
+        return f"background-color: {color}; color: {txt}; border-radius: 10px; font-weight: bold; font-size: 13px;"
+
+    def toggle_pump(self):
+        self.pump_on = not self.pump_on
+        state = "ON" if self.pump_on else "OFF"
+        self.btn_pump.setText(f"PUMP: {state}")
+        color = COLOR_AQUA if self.pump_on else COLOR_TEAL
+        self.btn_pump.setStyleSheet(self.get_btn_style(color))
+        self.mqtt.publish("shrimp/pump/command", f"PUMP {state}")
+
+    def reset_all(self):
         self.running = False
         self.timer.stop()
+        self.detector.reset_total_count()
+        self.threshold_count = 0
+        self.threshold_reached = False
+        self.lbl_count.setText("Count: 0")
+        self.lbl_target.setText("Target: Not Set")
+        self.lbl_status.setText("SYSTEM RESET / DOOR OPEN")
         self.mqtt.publish("shrimp/servo1/command", "SERVO1_OPEN")
-        self.detector.reset_total_count() 
-        frame = self.camera.get_frame()
-        if frame is not None:
-            total_count_from_detector, frame_rgb = self.detector.detect(frame, draw=True)
-            self.count = total_count_from_detector
-            self.video.set_frame(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-        else:
-            self.count = 0
-        self.threshold_count = 0 
-        self.threshold_reached = False 
-        self.lblCount.setText(f"Count: {self.count}")
-        self.lblFeed.setText("Biomass: 0.00g | Feed: 0.00g | Protein: 0.00g | Filler: 0.00g")
-        self.lblStatus.setText("Idle")
-        self.lblThresholdStatus.setText("Target Count: Not Set")
-        self.btnDispense.setEnabled(False)
-        self.btnDispense.setStyleSheet(self.make_button_style(self.COLOR_DISPENSE_INACTIVE))
-        QtWidgets.QMessageBox.information(self, "Reset", "Process has been reset successfully.")
+        
+        # Reset buttons to initial state
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setStyleSheet(self.get_btn_style(COLOR_NEUTRAL))
+        self.btn_save.setEnabled(False)
+        self.btn_save.setStyleSheet(self.get_btn_style(COLOR_NEUTRAL))
+        self.btn_dispense.setEnabled(False)
+        self.btn_dispense.setStyleSheet(self.get_btn_style(COLOR_NEUTRAL))
+
+    def start(self):
+        self.running = True
+        self.timer.start(100)
+        self.lbl_status.setText("RUNNING...")
+        # Enable Stop and Save now that we've started
+        self.btn_stop.setEnabled(True)
+        self.btn_stop.setStyleSheet(self.get_btn_style(COLOR_TEAL))
+        self.btn_save.setEnabled(True)
+        self.btn_save.setStyleSheet(self.get_btn_style(COLOR_TEAL))
+
+    def stop(self):
+        self.running = False
+        self.timer.stop()
+        self.lbl_status.setText("STOPPED")
+        # Enable Dispense only after Stop/Save is triggered
+        self.btn_dispense.setEnabled(True)
+        self.btn_dispense.setStyleSheet(self.get_btn_style(COLOR_AQUA))
 
     def save(self):
-        # (This function is unchanged)
-        b, f, p, fl = compute_feed(self.count)
-        save_biomass_record(self.user_id, self.count, b, f)
-        QtWidgets.QMessageBox.information(self, "Saved", "Process saved locally.")
-        self.lblStatus.setText("Saved")
-        self.btnDispense.setEnabled(True)
-        self.btnDispense.setStyleSheet(self.make_button_style(self.COLOR_DISPENSE_ACTIVE))
+        b, f, p, fl = compute_feed(self.detector.total_count)
+        save_biomass_record(self.user_id, self.detector.total_count, b, f)
+        self.lbl_status.setText("DATA SAVED")
+        # Enable Dispense only after Stop/Save is triggered
+        self.btn_dispense.setEnabled(True)
+        self.btn_dispense.setStyleSheet(self.get_btn_style(COLOR_AQUA))
+
+    def dispense(self):
+        self.mqtt.publish("shrimp/servo3/command", "SERVO3_DISPENSE")
+        self.lbl_status.setText("FEED DISPENSED")
 
     def go_back(self):
         self.timer.stop()
         self.mqtt.disconnect()
-        # self.close_keyboard() # <-- This is gone
-        try:
-            self.camera.release()
-        except Exception:
-            pass
-        if self.parent:
-            self.parent.update_recent()
-            self.parent.show()
+        self.camera.release()
+        if self.parent: self.parent.show()
         self.close()
 
-    # --- Hardware Functions ---
-    def open_pump_control(self):
-        dialog = PumpControlDialog(self)
-        dialog.exec_()
-
-    def reset_door(self):
-        # (This function is unchanged)
-        print("MQTT: Sending SERVO1_OPEN (manual reset)")
-        self.mqtt.publish("shrimp/servo1/command", "SERVO1_OPEN")
-        self.threshold_count = 0 
-        self.threshold_reached = False 
-        self.lblThresholdStatus.setText("Target Count: Not Set")
-    
-    # --- MODIFIED set_count function ---
     def set_count(self):
-        # 1. Create and show the new numpad dialog
         dialog = NumberInputDialog(self)
-        
         if dialog.exec_():
             num = dialog.get_number()
             if num > 0:
                 self.threshold_count = num
-                self.threshold_reached = False 
-                print(f"Target count set to: {self.threshold_count}")
-                self.lblThresholdStatus.setText(f"Target Count: {num}")
-        
-        # 2. No keyboard calls needed.
-    
-    def dispense_feed(self):
-        # (This function is unchanged)
-        print("MQTT: Sending DISPENSE command")
-        self.mqtt.publish("shrimp/servo3/command", "SERVO3_DISPENSE")
+                self.lbl_target.setText(f"Target: {num}")
 
     def update_frame(self):
-        # (This function is unchanged)
         frame = self.camera.get_frame()
-        if frame is None:
-            print("Failed to get frame from camera.")
-            return
-        count, frame_rgb = self.detector.detect(frame)
-        self.count = count
-        if self.threshold_count > 0 and not self.threshold_reached:
-            if self.count >= self.threshold_count:
-                print(f"Target count reached ({self.count})! Sending CLOSE command.")
+        if frame is not None:
+            count, frame_rgb = self.detector.detect(frame)
+            if self.threshold_count > 0 and count >= self.threshold_count and not self.threshold_reached:
                 self.mqtt.publish("shrimp/servo1/command", "SERVO1_CLOSE")
                 self.threshold_reached = True
-        b, f, p, fl = compute_feed(count)
-        self.lblCount.setText(f"Count: {count}")
-        self.lblFeed.setText(f"Biomass: {b:.2f}g | Feed: {f:.2f}g | Protein: {p:.2f}g | Filler: {fl:.2f}g")
-        self.video.set_frame(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-
-    # (Helper function and main block are unchanged)
-    def make_button_style(self, color):
-        return f"""
-            QPushButton {{
-                background-color:{color};
-                color:white;
-                border-radius:12px;
-                font-size:16px;
-                font-weight:bold;
-            }}
-            QPushButton:pressed, QPushButton:checked {{
-                background-color:#005fa3;
-            }}
-        """
+                self.lbl_status.setText("TARGET REACHED / DOOR CLOSED")
+            
+            self.lbl_count.setText(f"Count: {count}")
+            b, f, p, fl = compute_feed(count)
+            self.lbl_bio.setText(f"Biomass: {b:.2f}g\nFeed: {f:.2f}g")
+            
+            h, w, ch = frame_rgb.shape
+            qimg = QtGui.QImage(frame_rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
+            pix = QtGui.QPixmap.fromImage(qimg).scaled(640, 420, QtCore.Qt.KeepAspectRatio)
+            self.video_label.setPixmap(pix)
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
-    app.setAttribute(QtCore.Qt.AA_DisableHighDpiScaling, True)
-    app.setAttribute(QtCore.Qt.AA_Use96Dpi, True)
-    win = BiomassWindow(user_id=1)
-    win.show()
+    win = BiomassWindow(user_id="test_user")
     sys.exit(app.exec_())
