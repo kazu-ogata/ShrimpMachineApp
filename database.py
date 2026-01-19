@@ -2,16 +2,12 @@ import sqlite3, os, datetime, bcrypt, uuid
 from pymongo import MongoClient
 from bson import ObjectId
 
-# ------------------------
 # Configuration
-# ------------------------
 DB_PATH = "local.db"
 MONGO_URI = "mongodb+srv://qajgvalencia:BUxIhYb4nDlfH4DV@cluster0.h07iggq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 MONGO_DB_NAME = "test"
 
-# ------------------------
 # Database Initialization
-# ------------------------
 def init_db():
     """Initialize local SQLite database tables."""
     conn = sqlite3.connect(DB_PATH)
@@ -38,9 +34,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ------------------------
-# QR Handshake Functions (New)
-# ------------------------
+# QR Handshake Functions
 def create_qr_session():
     """Generates a unique ID and puts it in MongoDB to wait for a mobile scan."""
     session_id = str(uuid.uuid4())
@@ -70,16 +64,13 @@ def poll_for_login(session_id):
             user_data = db["users"].find_one({"_id": ObjectId(str(user_id))})
             
             if user_data:
-                # Save to local SQLite for offline use
                 cache_user(str(user_id), user_data['username'], user_data['email'], user_data['password'])
                 return str(user_id)
     except Exception as e:
         print(f"Polling error: {e}")
     return None
 
-# ------------------------
 # Local User Caching
-# ------------------------
 def cache_user(uid, username, email, hashed_pw):
     """Save user locally so they can log in offline next time."""
     conn = sqlite3.connect(DB_PATH)
@@ -90,9 +81,7 @@ def cache_user(uid, username, email, hashed_pw):
     conn.commit()
     conn.close()
 
-# ------------------------
 # Biomass Record Handling (REQUIRED BY UI)
-# ------------------------
 def save_biomass_record(owner_id, shrimp_count, biomass, feed_measurement):
     conn = sqlite3.connect(DB_PATH)
     record_id = str(uuid.uuid4())
@@ -190,3 +179,50 @@ def sync_biomass_records(owner_id):
 
     conn.close()
     return n
+
+def verify_user_credentials(identifier, password):
+    """Primary check against MongoDB Atlas, falls back to Local for offline support."""
+    import bcrypt
+    
+    # 1. TRY MONGODB ATLAS FIRST (Main Database)
+    try:
+        # Use existing MONGO_URI and MONGO_DB_NAME
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client[MONGO_DB_NAME]
+        
+        # Look for user by email or username in your main cloud database
+        user_data = db["users"].find_one({
+            "$or": [{"email": identifier}, {"username": identifier}]
+        })
+
+        if user_data:
+            hashed_pw = user_data['password']
+            # Convert to bytes if stored as string
+            pw_bytes = hashed_pw if isinstance(hashed_pw, bytes) else hashed_pw.encode('utf-8')
+            
+            if bcrypt.checkpw(password.encode('utf-8'), pw_bytes):
+                uid = str(user_data['_id'])
+                # Update local cache so they can log in even if internet is down later
+                cache_user(uid, user_data['username'], user_data['email'], hashed_pw)
+                return uid
+    except Exception as e:
+        print(f"MongoDB Login Error (checking local instead): {e}")
+
+    # 2. OFFLINE FALLBACK: Check Local SQLite
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT id, password FROM users WHERE username=? OR email=?", 
+        (identifier, identifier)
+    ).fetchone()
+    conn.close()
+
+    if row:
+        user_id, hashed_pw = row
+        try:
+            pw_bytes = hashed_pw if isinstance(hashed_pw, bytes) else hashed_pw.encode('utf-8')
+            if bcrypt.checkpw(password.encode('utf-8'), pw_bytes):
+                return user_id
+        except Exception as e:
+            print(f"Local login fallback error: {e}")
+
+    return None
