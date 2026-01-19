@@ -236,10 +236,27 @@ class BiomassWindow(QtWidgets.QWidget):
         self.btn_dispense.setStyleSheet(self.get_btn_style(COLOR_AQUA))
 
     def save(self):
-        b, f, p, fl = compute_feed(self.detector.total_count)
-        save_biomass_record(self.user_id, self.detector.total_count, b, f)
-        self.lbl_status.setText("DATA SAVED")
-        # Enable Dispense only after Stop/Save is triggered
+        # 1. Calculate and save locally
+        count = self.detector.total_count
+        b, f, p, fl = compute_feed(count)
+        save_biomass_record(self.user_id, count, b, f)
+        
+        # 2. SEND TO MOBILE APP VIA MQTT (Real-time)
+        import json
+        payload = {
+            "userId": self.user_id,
+            "shrimpCount": count,
+            "biomass": round(b, 2),
+            "feed": round(f, 2),
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        self.mqtt.publish(f"shrimp/updates/{self.user_id}", json.dumps(payload))
+        
+        # 3. Trigger Cloud Sync (Optional: make it automatic)
+        from database import sync_biomass_records
+        sync_biomass_records(self.user_id)
+        
+        self.lbl_status.setText("DATA SENT TO CLOUD & MOBILE")
         self.btn_dispense.setEnabled(True)
         self.btn_dispense.setStyleSheet(self.get_btn_style(COLOR_AQUA))
 
